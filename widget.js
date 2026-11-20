@@ -11,7 +11,7 @@
 // Tapping the widget does whatever its "When Interacting" setting says.
 // Size: medium only for now. Other sizes show a placeholder.
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const API = "https://be-svitlo.oe.if.ua/schedule-by-queue";
 const REFRESH_MS = 15 * 60 * 1000;
 
@@ -213,12 +213,13 @@ function refreshDate(change) {
 
 // Medium widget: one continuous bar for today. The past is dimmed, a white line marks now,
 // and every switch time is labelled under the bar.
-const BAR_W = 308;
-const LABEL_W = 24; // "22:30" at 8.5 pt is about 22 pt wide
+const BAR_W = 308; // drawing width; the image is then fitted to the widget's content width
+const LABEL_W = 24; // "22:30" at 8.5 pt is about 23 pt wide: used to keep labels apart
+const LABEL_BOX = 40; // drawTextInRect clips text to its rect, so draw into a wider box
 
 function dayBar(model, now) {
   const ctx = new DrawContext();
-  ctx.size = new Size(BAR_W, 30);
+  ctx.size = new Size(BAR_W, 32);
   ctx.opaque = false;
   ctx.respectScreenScale = true;
 
@@ -262,19 +263,19 @@ function dayBar(model, now) {
   const ordered = [...times.filter(ms => ms > now.getTime()), ...times.filter(ms => ms <= now.getTime()).reverse()];
   const placed = [];
   for (const ms of ordered) {
-    const left = Math.min(Math.max(xAt(new Date(ms)) - LABEL_W / 2, 0), BAR_W - LABEL_W);
-    if (placed.some(p => Math.abs(p.left - left) < LABEL_W + 1)) continue;
-    placed.push({ left, text: hhmm(new Date(ms)) });
+    const cx = Math.min(Math.max(xAt(new Date(ms)), LABEL_W / 2), BAR_W - LABEL_W / 2);
+    if (placed.some(p => Math.abs(p.cx - cx) < LABEL_W + 1)) continue;
+    placed.push({ cx, text: hhmm(new Date(ms)) });
   }
   ctx.setFont(Font.semiboldSystemFont(8.5));
   ctx.setTextColor(color(P.white));
   ctx.setTextAlignedCenter();
-  for (const p of placed) ctx.drawTextInRect(p.text, new Rect(p.left, 19, LABEL_W, 11));
-  if (!placed.some(p => p.left < LABEL_W + 1)) {
+  for (const p of placed) ctx.drawTextInRect(p.text, new Rect(p.cx - LABEL_BOX / 2, 19, LABEL_BOX, 12));
+  if (!placed.some(p => p.cx < LABEL_W * 1.5 + 1)) { // "00:00" spans 0…LABEL_W
     ctx.setFont(Font.systemFont(8.5));
     ctx.setTextColor(color(P.muted));
     ctx.setTextAlignedLeft();
-    ctx.drawTextInRect("00:00", new Rect(0, 19, LABEL_W, 11));
+    ctx.drawTextInRect("00:00", new Rect(0, 19, LABEL_BOX, 12));
   }
   return ctx.getImage();
 }
@@ -362,8 +363,8 @@ function makeMedium(cfg, model, data, now) {
   w.addSpacer();
   if (model.today) {
     const image = w.addImage(dayBar(model, now));
-    image.imageSize = new Size(BAR_W, 30);
-    image.centerAlignImage();
+    image.resizable = true;
+    image.applyFittingContentMode(); // stretch to the content width, which differs between iPhones
     w.addSpacer(4);
   }
   footer(w, model, data);
