@@ -5,13 +5,13 @@
 // Shows the SCHEDULE, not whether the power is actually on.
 //
 // Queue and name come from the widget Parameter (long-press the widget → Edit Widget → Parameter):
-//   4.2 Квартира   — queue 4.2 labelled "Квартира"
+//   4.2 Home       — queue 4.2 labelled "Home"
 //   4.2            — no label
 // Every widget has its own Parameter, so two widgets can show two queues.
 // Tapping the widget does whatever its "When Interacting" setting says.
 // Sizes: medium and small. Other sizes show a placeholder.
 
-const VERSION = "1.1.1";
+const VERSION = "1.1.2";
 const API = "https://be-svitlo.oe.if.ua/schedule-by-queue";
 const REFRESH_MS = 15 * 60 * 1000;
 
@@ -44,7 +44,7 @@ function label(parent, value, size, hex, bold = false, alpha = 1) {
 
 // ---------- Widget parameter ----------
 
-// "4.2 Квартира", "4,2", "4.2 | Ліфт" → {queue, name}; otherwise null.
+// "4.2 Home", "4,2", "4.2 | Lift" → {queue, name}; otherwise null.
 function parseParam(raw) {
   const m = String(raw || "").trim().match(/^(\d{1,2})[.,](\d{1,2})\s*[|,;:·—–-]?\s*(.*)$/);
   return m ? { queue: `${m[1]}.${m[2]}`, name: m[3].trim().slice(0, 24) } : null;
@@ -188,11 +188,9 @@ function nextChange(model, now) {
   return null;
 }
 
-const upcoming = (model, now, limit) =>
-  model.intervals.filter(it => it.end > now).slice(0, limit);
-
-function rangeText(it, now, withDay = true) {
-  const tomorrow = withDay && it.start >= startOfDay(now, 1) ? "Завтра " : "";
+// "12:00–15:30", prefixed with the word "tomorrow" when the outage starts tomorrow.
+function rangeText(it, now) {
+  const tomorrow = it.start >= startOfDay(now, 1) ? "Завтра " : "";
   return `${tomorrow}${hhmm(it.start)}–${hhmm(it.end)}`;
 }
 
@@ -289,7 +287,7 @@ function dayBar(model, now, compact = false) {
 function header(w, cfg, compact = false) {
   const head = w.addStack();
   head.centerAlignContent();
-  if (compact) { // small: "⚡ КВАРТИРА   4.2", or "⚡ ЧЕРГА 4.2" without a name
+  if (compact) { // small: name on the left and queue on the right, or just the queue without a name
     label(head, `⚡ ${cfg.name ? cfg.name.toUpperCase() : `ЧЕРГА ${cfg.queue}`}`, 11, P.white, true);
     head.addSpacer();
     if (cfg.name) label(head, cfg.queue, 10, P.muted, true);
@@ -300,12 +298,12 @@ function header(w, cfg, compact = false) {
   label(head, cfg.name ? `ЧЕРГА ${cfg.queue}` : `ІВ.-ФРАНКІВСЬК · ${cfg.queue}`, 10, P.muted, true);
 }
 
-// "Оновлено 13:10", or a yellow "Кеш 13:10" when the data came from the cache.
+// Time of the last fetch, shown in yellow and marked as cache when the data came from the cache.
 const updatedLabel = (parent, data) =>
   label(parent, `${data.cached ? "Кеш" : "Оновлено"} ${hhmm(new Date(data.fetchedAt))}`, 9,
     data.cached ? P.maybe : P.muted);
 
-// Live countdown: iOS updates it by itself and formats it ("4 год 30 хв") in the phone's language.
+// Live countdown: iOS updates it by itself and formats it (e.g. "4 hr, 30 min") in the phone's language.
 function addCountdown(parent, date, size) {
   const t = parent.addDate(date);
   t.applyRelativeStyle();
@@ -315,7 +313,7 @@ function addCountdown(parent, date, size) {
   t.minimumScaleFactor = 0.5;
 }
 
-// "Графік від 17:17" (with the date if approved on another day) · "Оновлено 13:10" or a yellow "Кеш 13:10".
+// Footer: when the schedule was approved (with the date if not today) · when the data was fetched.
 function footer(w, model, data) {
   const f = w.addStack();
   f.centerAlignContent();
@@ -344,13 +342,15 @@ function makeMedium(cfg, model, data, now) {
   const cur = model.stateAt(now);
   const status = statusFor(cur);
   const change = nextChange(model, now);
-  const outages = upcoming(model, now, 3);
+  const ahead = model.intervals.filter(it => it.end > now);
+  const outages = ahead.slice(0, 3); // three rows is all the height allows
+  const more = ahead.length - outages.length;
 
   const main = w.addStack();
   main.layoutHorizontally();
   main.topAlignContent();
 
-  // Left: state → "вимкнуть через" → live countdown "4 год 30 хв".
+  // Left: state → caption ("power goes off in") → live countdown.
   const left = main.addStack();
   left.layoutVertically();
   label(left, status.text, 11, status.hex, true);
@@ -364,11 +364,11 @@ function makeMedium(cfg, model, data, now) {
     label(left, cur === "unknown" ? "ще не опубліковано" : "час зміни невідомий", 10, P.muted);
   }
 
-  // Right: up to three nearest outages, including the current one.
+  // Right: up to three nearest outages, including the current one; the header counts the rest.
   main.addSpacer();
   const right = main.addStack();
   right.layoutVertically();
-  label(right, "ВІДКЛЮЧЕННЯ", 9, P.muted, true);
+  label(right, more ? `ВІДКЛЮЧЕННЯ · ЩЕ ${more}` : "ВІДКЛЮЧЕННЯ", 9, P.muted, true);
   right.addSpacer(5);
   if (outages.length) {
     for (const it of outages) {
@@ -419,13 +419,11 @@ function makeSmall(cfg, model, data, now) {
   if (next) {
     const row = w.addStack();
     row.centerAlignContent();
-    const tomorrow = next.start >= startOfDay(now, 1);
-    if (!tomorrow) {
+    if (next.start < startOfDay(now, 1)) { // the "next" label does not fit next to a "tomorrow" range
       label(row, "наступне", 10, P.muted);
       row.addSpacer(4);
     }
-    label(row, `● ${tomorrow ? "завтра " : ""}${hhmm(next.start)}–${hhmm(next.end)}`, 10,
-      next.kind === "off" ? P.off : P.maybe, true);
+    label(row, `● ${rangeText(next, now)}`, 10, next.kind === "off" ? P.off : P.maybe, true);
     row.addSpacer();
     w.addSpacer(5);
   } else if (model.today) {
@@ -500,34 +498,11 @@ function makeSetup() {
   return w;
 }
 
-// ---------- Running in the app: hint and preview ----------
+// ---------- Running in the app ----------
 
-async function app(info = {}) {
-  let warning = "";
-  for (;;) {
-    const a = new Alert();
-    a.title = "Світло ІФ";
-    a.message = warning +
-      "Чергу вкажи у віджеті: утримай віджет → «Редагувати віджет» → Parameter. " +
-      "Черга обов'язкова, назва за бажанням через пробіл: «4.2 Квартира» або «4.2»." +
-      "\n\nЩоб подивитися віджет тут, впиши параметр і вибери розмір." +
-      `\n\nВерсія ${VERSION}` + (info.updateError ? `\n⚠︎ Оновлення: ${info.updateError}` : "");
-    a.addTextField("4.2 Квартира", args.widgetParameter || "4.2");
-    a.addAction("Середній");
-    a.addAction("Малий");
-    a.addCancelAction("Готово");
-    const choice = await a.presentAlert();
-    if (choice < 0) return;
-    const cfg = parseParam(a.textFieldValue(0));
-    if (!cfg) {
-      warning = "⚠︎ Не вдалося прочитати чергу. Потрібно так: 4.2 Квартира\n\n";
-      continue;
-    }
-    const small = choice === 1;
-    const widget = await buildWidget(cfg, small ? "small" : "medium");
-    await (small ? widget.presentSmall() : widget.presentMedium());
-    return;
-  }
+// No UI: running the script in Scriptable only makes loader.js check for an update right away.
+function app(info = {}) {
+  console.log(`Svitlo IF ${VERSION}${info.updateError ? `, update error: ${info.updateError}` : ""}`);
 }
 
 // ---------- Module interface for loader.js ----------
