@@ -11,7 +11,7 @@
 // Tapping the widget does whatever its "When Interacting" setting says.
 // Sizes: medium and small. Other sizes show a placeholder.
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 const API = "https://be-svitlo.oe.if.ua/schedule-by-queue";
 const REFRESH_MS = 15 * 60 * 1000;
 
@@ -222,14 +222,14 @@ const LABEL_BOX = 40; // drawTextInRect clips text to its rect, so draw into a w
 function dayBar(model, now, compact = false) {
   const W = compact ? SMALL_BAR_W : BAR_W;
   const ctx = new DrawContext();
-  ctx.size = new Size(W, compact ? 10 : 32);
+  ctx.size = new Size(W, compact ? 13 : 32);
   ctx.opaque = false;
   ctx.respectScreenScale = true;
 
   const day0 = model.from;
   const day1 = startOfDay(day0, 1);
   const xAt = t => W * Math.min(Math.max((t - day0) / (day1 - day0), 0), 1);
-  const [top, h, r, lineH] = compact ? [2, 6, 3, 10] : [2.5, 13, 4, 18];
+  const [top, h, r, lineH] = compact ? [2, 9, 4, 13] : [2.5, 13, 4, 18];
 
   const today = model.intervals.filter(it => it.end > day0 && it.start < day1)
     .sort((a, b) => (a.kind === "off") - (b.kind === "off")); // draw "off" over "maybe"
@@ -427,6 +427,12 @@ function makeSmall(cfg, model, data, now) {
     label(row, `● ${tomorrow ? "завтра " : ""}${hhmm(next.start)}–${hhmm(next.end)}`, 10,
       next.kind === "off" ? P.off : P.maybe, true);
     row.addSpacer();
+    w.addSpacer(5);
+  } else if (model.today) {
+    // Nothing ahead: say so instead of leaving a gap.
+    const hadToday = model.intervals.some(it => it.start < startOfDay(now, 1));
+    label(w, model.tomorrow ? "далі без відключень" : hadToday ? "сьогодні більше немає" : "сьогодні без відключень",
+      10, P.muted);
     w.addSpacer(5);
   }
   if (model.today) {
