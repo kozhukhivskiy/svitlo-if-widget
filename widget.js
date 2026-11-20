@@ -9,9 +9,9 @@
 //   4.2            — no label
 // Every widget has its own Parameter, so two widgets can show two queues.
 // Tapping the widget does whatever its "When Interacting" setting says.
-// Size: medium only for now. Other sizes show a placeholder.
+// Sizes: medium and small. Other sizes show a placeholder.
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 const API = "https://be-svitlo.oe.if.ua/schedule-by-queue";
 const REFRESH_MS = 15 * 60 * 1000;
 
@@ -211,27 +211,30 @@ function refreshDate(change) {
 
 // ---------- Drawing ----------
 
-// Medium widget: one continuous bar for today. The past is dimmed, a white line marks now,
-// and every switch time is labelled under the bar.
-const BAR_W = 308; // drawing width; the image is then fitted to the widget's content width
+// One continuous bar for today. The past is dimmed and a white line marks now.
+// The medium widget also labels every switch time under the bar; the small one has no room for that.
+// Drawing widths below; the image is then fitted to the widget's content width.
+const BAR_W = 308;
+const SMALL_BAR_W = 132;
 const LABEL_W = 24; // "22:30" at 8.5 pt is about 23 pt wide: used to keep labels apart
 const LABEL_BOX = 40; // drawTextInRect clips text to its rect, so draw into a wider box
 
-function dayBar(model, now) {
+function dayBar(model, now, compact = false) {
+  const W = compact ? SMALL_BAR_W : BAR_W;
   const ctx = new DrawContext();
-  ctx.size = new Size(BAR_W, 32);
+  ctx.size = new Size(W, compact ? 10 : 32);
   ctx.opaque = false;
   ctx.respectScreenScale = true;
 
   const day0 = model.from;
   const day1 = startOfDay(day0, 1);
-  const xAt = t => BAR_W * Math.min(Math.max((t - day0) / (day1 - day0), 0), 1);
-  const top = 2.5, h = 13, r = 4;
+  const xAt = t => W * Math.min(Math.max((t - day0) / (day1 - day0), 0), 1);
+  const [top, h, r, lineH] = compact ? [2, 6, 3, 10] : [2.5, 13, 4, 18];
 
   const today = model.intervals.filter(it => it.end > day0 && it.start < day1)
     .sort((a, b) => (a.kind === "off") - (b.kind === "off")); // draw "off" over "maybe"
   ctx.setFillColor(color(P.on));
-  ctx.fillRect(new Rect(0, top, BAR_W, h));
+  ctx.fillRect(new Rect(0, top, W, h));
   for (const it of today) {
     ctx.setFillColor(color(it.kind === "off" ? P.off : P.maybe));
     ctx.fillRect(new Rect(xAt(it.start), top, xAt(it.end) - xAt(it.start), h));
@@ -242,7 +245,7 @@ function dayBar(model, now) {
 
   // Rounded corners: paint the corners over with the widget background colour.
   ctx.setFillColor(color(P.bg));
-  for (const [cx, cy, dx, dy] of [[0, top, 1, 1], [BAR_W, top, -1, 1], [0, top + h, 1, -1], [BAR_W, top + h, -1, -1]]) {
+  for (const [cx, cy, dx, dy] of [[0, top, 1, 1], [W, top, -1, 1], [0, top + h, 1, -1], [W, top + h, -1, -1]]) {
     const corner = new Path();
     corner.move(new Point(cx, cy));
     corner.addLine(new Point(cx + dx * r, cy));
@@ -253,7 +256,8 @@ function dayBar(model, now) {
   }
 
   ctx.setFillColor(Color.white());
-  ctx.fillRect(new Rect(Math.min(Math.max(nowX - 0.75, 0), BAR_W - 1.5), 0, 1.5, 18));
+  ctx.fillRect(new Rect(Math.min(Math.max(nowX - 0.75, 0), W - 1.5), 0, 1.5, lineH));
+  if (compact) return ctx.getImage();
 
   // Switch-time labels. DrawContext cannot measure text, so a label that would overlap an
   // already placed one is skipped; future switches are placed first, then past ones.
@@ -263,7 +267,7 @@ function dayBar(model, now) {
   const ordered = [...times.filter(ms => ms > now.getTime()), ...times.filter(ms => ms <= now.getTime()).reverse()];
   const placed = [];
   for (const ms of ordered) {
-    const cx = Math.min(Math.max(xAt(new Date(ms)), LABEL_W / 2), BAR_W - LABEL_W / 2);
+    const cx = Math.min(Math.max(xAt(new Date(ms)), LABEL_W / 2), W - LABEL_W / 2);
     if (placed.some(p => Math.abs(p.cx - cx) < LABEL_W + 1)) continue;
     placed.push({ cx, text: hhmm(new Date(ms)) });
   }
@@ -282,12 +286,33 @@ function dayBar(model, now) {
 
 // ---------- Widgets ----------
 
-function header(w, cfg) {
+function header(w, cfg, compact = false) {
   const head = w.addStack();
   head.centerAlignContent();
+  if (compact) { // small: "⚡ КВАРТИРА   4.2", or "⚡ ЧЕРГА 4.2" without a name
+    label(head, `⚡ ${cfg.name ? cfg.name.toUpperCase() : `ЧЕРГА ${cfg.queue}`}`, 11, P.white, true);
+    head.addSpacer();
+    if (cfg.name) label(head, cfg.queue, 10, P.muted, true);
+    return;
+  }
   label(head, `⚡ ${(cfg.name || "Світло").toUpperCase()}`, 12, P.white, true);
   head.addSpacer();
   label(head, cfg.name ? `ЧЕРГА ${cfg.queue}` : `ІВ.-ФРАНКІВСЬК · ${cfg.queue}`, 10, P.muted, true);
+}
+
+// "Оновлено 13:10", or a yellow "Кеш 13:10" when the data came from the cache.
+const updatedLabel = (parent, data) =>
+  label(parent, `${data.cached ? "Кеш" : "Оновлено"} ${hhmm(new Date(data.fetchedAt))}`, 9,
+    data.cached ? P.maybe : P.muted);
+
+// Live countdown: iOS updates it by itself and formats it ("4 год 30 хв") in the phone's language.
+function addCountdown(parent, date, size) {
+  const t = parent.addDate(date);
+  t.applyRelativeStyle();
+  t.font = Font.boldSystemFont(size);
+  t.textColor = color(P.white);
+  t.lineLimit = 1;
+  t.minimumScaleFactor = 0.5;
 }
 
 // "Графік від 17:17" (with the date if approved on another day) · "Оновлено 13:10" or a yellow "Кеш 13:10".
@@ -298,8 +323,7 @@ function footer(w, model, data) {
   const m = since && since.match(/^(\d{2}\.\d{2})\.\d{4} (\d{1,2}:\d{2})$/);
   if (m) label(f, `Графік від ${m[1] === model.today.date.slice(0, 5) ? m[2] : `${m[1]} ${m[2]}`}`, 9, P.muted);
   f.addSpacer();
-  label(f, `${data.cached ? "Кеш" : "Оновлено"} ${hhmm(new Date(data.fetchedAt))}`, 9,
-    data.cached ? P.maybe : P.muted);
+  updatedLabel(f, data);
 }
 
 // Caption above the countdown to the next change (keyed by newState from nextChange).
@@ -333,12 +357,7 @@ function makeMedium(cfg, model, data, now) {
   left.addSpacer(3);
   if (change) {
     label(left, CHANGE_CAPTION[change.newState], 10, P.muted);
-    const countdown = left.addDate(change.at);
-    countdown.applyRelativeStyle(); // iOS formats it ("4 год 30 хв") in the phone's language
-    countdown.font = Font.boldSystemFont(26);
-    countdown.textColor = color(P.white);
-    countdown.lineLimit = 1;
-    countdown.minimumScaleFactor = 0.6;
+    addCountdown(left, change.at, 26);
   } else if (cur === "on") {
     label(left, model.tomorrow ? "до кінця завтра" : "до кінця дня", 19, P.white, true);
   } else {
@@ -372,19 +391,68 @@ function makeMedium(cfg, model, data, now) {
   return w;
 }
 
-// Sizes not implemented yet: small and lock screen.
-function makeUnsupported() {
+// Small widget: the medium widget's left column, then the next outage and a compact day bar.
+function makeSmall(cfg, model, data, now) {
   const w = new ListWidget();
-  w.addText("Світло ІФ: поки є лише середній розмір");
+  w.backgroundColor = color(P.bg);
+  w.setPadding(12, 13, 11, 13);
+  header(w, cfg, true);
+  w.addSpacer(7);
+
+  const cur = model.stateAt(now);
+  const status = statusFor(cur);
+  const change = nextChange(model, now);
+  label(w, status.text, 11, status.hex, true);
+  w.addSpacer(2);
+  if (change) {
+    label(w, CHANGE_CAPTION[change.newState], 10, P.muted);
+    addCountdown(w, change.at, 20);
+  } else if (cur === "on") {
+    label(w, model.tomorrow ? "до кінця завтра" : "до кінця дня", 15, P.white, true);
+  } else {
+    label(w, cur === "unknown" ? "ще не опубліковано" : "час зміни невідомий", 10, P.muted);
+  }
+  w.addSpacer();
+
+  // The next outage that has not started yet. When the power is on, it is the one the countdown leads to.
+  const next = model.intervals.find(it => it.start > now);
+  if (next) {
+    const row = w.addStack();
+    row.centerAlignContent();
+    const tomorrow = next.start >= startOfDay(now, 1);
+    if (!tomorrow) {
+      label(row, "наступне", 10, P.muted);
+      row.addSpacer(4);
+    }
+    label(row, `● ${tomorrow ? "завтра " : ""}${hhmm(next.start)}–${hhmm(next.end)}`, 10,
+      next.kind === "off" ? P.off : P.maybe, true);
+    row.addSpacer();
+    w.addSpacer(5);
+  }
+  if (model.today) {
+    const image = w.addImage(dayBar(model, now, true));
+    image.resizable = true;
+    image.applyFittingContentMode();
+    w.addSpacer(4);
+  }
+  updatedLabel(w, data);
+  w.refreshAfterDate = refreshDate(change);
   return w;
 }
 
-function makeError(cfg, error) {
+// Sizes not implemented: lock screen.
+function makeUnsupported() {
+  const w = new ListWidget();
+  w.addText("Світло ІФ: доступні середній і малий розміри");
+  return w;
+}
+
+function makeError(cfg, error, compact = false) {
   const w = new ListWidget();
   w.refreshAfterDate = new Date(Date.now() + 10 * 60 * 1000);
   w.backgroundColor = color(P.bg);
   w.setPadding(12, 15, 11, 15);
-  header(w, cfg);
+  header(w, cfg, compact);
   w.addSpacer();
   label(w, "Графік недоступний", 17, P.maybe, true);
   w.addSpacer(6);
@@ -396,13 +464,14 @@ function makeError(cfg, error) {
   return w;
 }
 
-async function buildWidget(cfg) {
+async function buildWidget(cfg, family) {
   const now = new Date();
+  const small = family === "small";
   try {
     const data = await loadData(cfg.queue);
-    return makeMedium(cfg, buildModel(data.days, now), data, now);
+    return (small ? makeSmall : makeMedium)(cfg, buildModel(data.days, now), data, now);
   } catch (error) {
-    return makeError(cfg, error);
+    return makeError(cfg, error, small);
   }
 }
 
@@ -419,7 +488,7 @@ function makeSetup() {
   const t = w.addText("Утримай віджет → «Редагувати віджет» → Parameter: черга і, за бажанням, назва через пробіл.\nНапр.: 4.2 Квартира");
   t.font = Font.systemFont(11);
   t.textColor = color(P.muted);
-  t.lineLimit = 6;
+  t.lineLimit = 8; // the small widget needs more lines
   t.minimumScaleFactor = 0.8;
   w.addSpacer();
   return w;
@@ -435,18 +504,22 @@ async function app(info = {}) {
     a.message = warning +
       "Чергу вкажи у віджеті: утримай віджет → «Редагувати віджет» → Parameter. " +
       "Черга обов'язкова, назва за бажанням через пробіл: «4.2 Квартира» або «4.2»." +
-      "\n\nЩоб подивитися віджет тут, впиши параметр і натисни «Показати віджет»." +
+      "\n\nЩоб подивитися віджет тут, впиши параметр і вибери розмір." +
       `\n\nВерсія ${VERSION}` + (info.updateError ? `\n⚠︎ Оновлення: ${info.updateError}` : "");
     a.addTextField("4.2 Квартира", args.widgetParameter || "4.2");
-    a.addAction("Показати віджет");
+    a.addAction("Середній");
+    a.addAction("Малий");
     a.addCancelAction("Готово");
-    if (await a.presentAlert() < 0) return;
+    const choice = await a.presentAlert();
+    if (choice < 0) return;
     const cfg = parseParam(a.textFieldValue(0));
     if (!cfg) {
       warning = "⚠︎ Не вдалося прочитати чергу. Потрібно так: 4.2 Квартира\n\n";
       continue;
     }
-    await (await buildWidget(cfg)).presentMedium();
+    const small = choice === 1;
+    const widget = await buildWidget(cfg, small ? "small" : "medium");
+    await (small ? widget.presentSmall() : widget.presentMedium());
     return;
   }
 }
@@ -458,9 +531,10 @@ module.exports = {
   version: VERSION,
   // Widget for the current size and parameter.
   widget: async () => {
-    if ((config.widgetFamily || "medium") !== "medium") return makeUnsupported();
+    const family = config.widgetFamily || "medium";
+    if (family !== "medium" && family !== "small") return makeUnsupported();
     const cfg = parseParam(args.widgetParameter);
-    return cfg ? await buildWidget(cfg) : makeSetup();
+    return cfg ? await buildWidget(cfg, family) : makeSetup();
   },
   app
 };
